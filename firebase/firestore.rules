@@ -1,0 +1,224 @@
+rules_version = '2';
+
+// Helper functions
+function isAuthenticated() {
+  return request.auth != null;
+}
+
+function getUserData() {
+  return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+}
+
+function isRole(role) {
+  return isAuthenticated() && getUserData().role == role;
+}
+
+function isInRole(roles) {
+  return isAuthenticated() && roles.hasAny([getUserData().role]);
+}
+
+function isSchoolAdmin(schoolId) {
+  return isAuthenticated() && getUserData().schoolId == schoolId && isInRole(['school_admin', 'super_admin']);
+}
+
+function isOwner(userId) {
+  return isAuthenticated() && request.auth.uid == userId;
+}
+
+function isSuperAdmin() {
+  return isRole('super_admin');
+}
+
+// Users collection
+match /users/{userId} {
+  allow read: if isAuthenticated() && (
+    isSuperAdmin() ||
+    request.auth.uid == userId ||
+    getUserData().schoolId == get(/databases/$(database)/documents/users/$(userId)).data.schoolId
+  );
+  allow create: if isAuthenticated();
+  allow update: if isAuthenticated() && (
+    request.auth.uid == userId ||
+    isSuperAdmin() ||
+    (isSchoolAdmin(getUserData().schoolId) && get(/databases/$(database)/documents/users/$(userId)).data.schoolId == getUserData().schoolId)
+  );
+  allow delete: if isSuperAdmin();
+}
+
+// Schools collection
+match /schools/{schoolId} {
+  allow read: if isAuthenticated();
+  allow create: if isSuperAdmin();
+  allow update: if isSuperAdmin() || isSchoolAdmin(schoolId);
+  allow delete: if isSuperAdmin();
+}
+
+// Classes collection
+match /classes/{classId} {
+  allow read: if isAuthenticated();
+  allow create: if isInRole(['super_admin', 'school_admin', 'principal']);
+  allow update: if isInRole(['super_admin', 'school_admin', 'principal']);
+  allow delete: if isSuperAdmin();
+}
+
+// Sections collection
+match /sections/{sectionId} {
+  allow read: if isAuthenticated();
+  allow write: if isInRole(['super_admin', 'school_admin', 'principal']);
+}
+
+// Subjects collection
+match /subjects/{subjectId} {
+  allow read: if isAuthenticated();
+  allow write: if isInRole(['super_admin', 'school_admin', 'principal']);
+}
+
+// Homework collection
+match /homework/{hwId} {
+  allow read: if isAuthenticated() && (
+    isInRole(['super_admin', 'school_admin', 'principal']) ||
+    isRole('teacher') ||
+    (isRole('student') && resource.data.class == getUserData().class && resource.data.section == getUserData().section) ||
+    (isRole('parent') && getUserData().childrenIds.hasAny([resource.data.studentId]))
+  );
+  allow create: if isRole('teacher');
+  allow update: if isRole('teacher') || isInRole(['school_admin', 'super_admin']);
+  allow delete: if isInRole(['school_admin', 'super_admin']);
+}
+
+// Attendance collection
+match /attendance/{attendanceId} {
+  allow read: if isAuthenticated() && (
+    isInRole(['super_admin', 'school_admin', 'principal']) ||
+    isRole('teacher') ||
+    (isRole('student') && resource.data.studentId == request.auth.uid) ||
+    (isRole('parent') && getUserData().childrenIds.hasAny([resource.data.studentId]))
+  );
+  allow create: if isRole('teacher');
+  allow update: if isRole('teacher') || isInRole(['school_admin', 'super_admin']);
+}
+
+// Results collection
+match /results/{resultId} {
+  allow read: if isAuthenticated() && (
+    isInRole(['super_admin', 'school_admin', 'principal']) ||
+    isRole('teacher') ||
+    (isRole('student') && resource.data.studentId == request.auth.uid) ||
+    (isRole('parent') && getUserData().childrenIds.hasAny([resource.data.studentId]))
+  );
+  allow create: if isRole('teacher');
+  allow update: if isRole('teacher') || isInRole(['school_admin', 'super_admin']);
+}
+
+// Assignments collection
+match /assignments/{assignmentId} {
+  allow read: if isAuthenticated();
+  allow create: if isRole('teacher');
+  allow update: if isRole('teacher') || isInRole(['school_admin', 'super_admin']);
+  allow delete: if isInRole(['school_admin', 'super_admin']);
+}
+
+// Groups collection
+match /groups/{groupId} {
+  allow read: if isAuthenticated() && (
+    resource.data.visibility == 'public' ||
+    (resource.data.visibility == 'private' && resource.data.members.hasAny([request.auth.uid])) ||
+    (resource.data.visibility == 'hidden' && isInRole(['school_admin', 'super_admin', 'principal']))
+  );
+  allow create: if isAuthenticated();
+  allow update: if isAuthenticated() && resource.data.moderators.hasAny([request.auth.uid]);
+  allow delete: if isInRole(['school_admin', 'super_admin']);
+}
+
+// Group posts collection
+match /groups/{groupId}/posts/{postId} {
+  allow read: if isAuthenticated();
+  allow create: if isAuthenticated() && get(/databases/$(database)/documents/groups/$(groupId)).data.members.hasAny([request.auth.uid]);
+  allow update: if isAuthenticated() && (
+    request.auth.uid == resource.data.authorId ||
+    get(/databases/$(database)/documents/groups/$(groupId)).data.moderators.hasAny([request.auth.uid])
+  );
+  allow delete: if isInRole(['school_admin', 'super_admin']) || get(/databases/$(database)/documents/groups/$(groupId)).data.moderators.hasAny([request.auth.uid]);
+}
+
+// Messages collection (subcollection per user)
+match /messages/{messageId} {
+  allow read: if isAuthenticated() && (
+    resource.data.senderId == request.auth.uid ||
+    resource.data.receiverId == request.auth.uid
+  );
+  allow create: if isAuthenticated();
+  allow update: if isAuthenticated() && resource.data.receiverId == request.auth.uid;
+  allow delete: if isAuthenticated() && resource.data.senderId == request.auth.uid;
+}
+
+// Notifications collection
+match /notifications/{notificationId} {
+  allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+  allow create: if isAuthenticated();
+  allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+  allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+}
+
+// Fees collection
+match /fees/{feeId} {
+  allow read: if isAuthenticated() && (
+    isInRole(['super_admin', 'school_admin']) ||
+    (isRole('parent') && getUserData().childrenIds.hasAny([resource.data.studentId]))
+  );
+  allow write: if isInRole(['super_admin', 'school_admin']);
+}
+
+// Achievement collection
+match /achievements/{achievementId} {
+  allow read: if isAuthenticated();
+  allow create: if isAuthenticated();
+  allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+}
+
+// Quizzes collection
+match /quizzes/{quizId} {
+  allow read: if isAuthenticated();
+  allow create: if isRole('teacher');
+  allow update: if isRole('teacher') || isInRole(['school_admin', 'super_admin']);
+  allow delete: if isRole('teacher') || isInRole(['school_admin', 'super_admin']);
+}
+
+// Notices collection
+match /notices/{noticeId} {
+  allow read: if isAuthenticated();
+  allow create: if isInRole(['teacher', 'principal', 'school_admin', 'super_admin']);
+  allow update: if isInRole(['principal', 'school_admin', 'super_admin']);
+  allow delete: if isInRole(['school_admin', 'super_admin']);
+}
+
+// Files collection
+match /files/{fileId} {
+  allow read: if isAuthenticated();
+  allow create: if isAuthenticated();
+  allow delete: if isAuthenticated() && (isSuperAdmin() || resource.data.uploadedBy == request.auth.uid);
+}
+
+// Moderation logs collection
+match /moderationLogs/{logId} {
+  allow read: if isInRole(['super_admin', 'school_admin', 'principal']);
+  allow create: if isInRole(['super_admin', 'school_admin']);
+  allow delete: if isSuperAdmin();
+}
+
+// Reports collection
+match /reports/{reportId} {
+  allow read: if isInRole(['super_admin', 'school_admin', 'principal']);
+  allow create: if isAuthenticated();
+  allow update: if isInRole(['super_admin', 'school_admin']);
+  allow delete: if isSuperAdmin();
+}
+
+// Storage rules
+match /{allPaths=**} {
+  allow read: if isAuthenticated();
+  allow write: if isAuthenticated() && (
+    request.resource.size < 10 * 1024 * 1024 && // 10MB limit
+    request.resource.contentType.matches('image/.*|application/pdf|application/msword|application/vnd.openxmlformats-officedocument.*|application/vnd.ms-powerpoint|video/mp4|video/quicktime')
+  );
+}

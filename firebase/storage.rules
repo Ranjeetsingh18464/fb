@@ -1,0 +1,51 @@
+rules_version = '2';
+
+// Restrict file uploads to authenticated users with size and type limits
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read: if request.auth != null;
+
+      allow write: if request.auth != null
+        && request.resource.size < 10 * 1024 * 1024  // 10MB max
+        && request.resource.contentType.matches('image/.*')
+        || request.resource.contentType == 'application/pdf'
+        || request.resource.contentType == 'application/msword'
+        || request.resource.contentType.matches('application/vnd.openxmlformats-officedocument.*')
+        || request.resource.contentType == 'application/vnd.ms-powerpoint'
+        || request.resource.contentType == 'application/vnd.ms-excel'
+        || request.resource.contentType.matches('video/.*')
+        && request.resource.size < 50 * 1024 * 1024;  // 50MB max for video
+
+      allow delete: if request.auth != null;
+    }
+
+    // User-specific upload folders
+    match /users/{userId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // School-specific upload folders
+    match /schools/{schoolId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.schoolId == schoolId;
+    }
+
+    // Homework attachments
+    match /homework/{hwId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // Profile pictures
+    match /profiles/{userId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId
+        && request.resource.contentType.matches('image/.*')
+        && request.resource.size < 5 * 1024 * 1024;  // 5MB for profile pics
+    }
+  }
+}
